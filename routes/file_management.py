@@ -19,7 +19,7 @@ s3_client = boto3.client(
 )
 
 @router.post("/api/upload")
-async def upload_file(file: UploadFile = File(...), background_tasks: BackgroundTasks):
+async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...),):
     """
     Handles the file upload process, uploads to S3, and saves metadata to MongoDB.
     """

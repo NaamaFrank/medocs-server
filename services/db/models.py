@@ -21,8 +21,10 @@ class PyObjectId(ObjectId):
         return ObjectId(v)
 
     @classmethod
-    def __modify_schema__(cls, field_schema: Dict[str, Any]):
-        field_schema.update(type="string")
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        json_schema = handler(core_schema)
+        json_schema.update(type="string")
+        return json_schema
 
 class User(BaseModel):
     """
@@ -49,7 +51,7 @@ class File(BaseModel):
     uploadDate: datetime = Field(default_factory=datetime.utcnow)
     extractedDataId: Optional[PyObjectId]
     rawText: Optional[str]
-    embeddings: Optional[List[conlist(float, min_items=1)]] 
+    embeddings: Optional[List[conlist(float, min_length=1)]] 
 
     class Config:
         arbitrary_types_allowed = True

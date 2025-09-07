@@ -4,8 +4,8 @@ from typing import List, Dict, Any
 from bson.objectid import ObjectId
 
 # Import the database client and models
-from database.client import get_mongo_client
-from database.models import ExtractedData, File
+from services.db.client import get_mongo_client
+from services.db.models import ExtractedData, File
 from services.db.dao.file_dao import insert_extracted_data, update_file_metadata
 
 # --- Placeholder for AI Model & OCR Libraries ---
