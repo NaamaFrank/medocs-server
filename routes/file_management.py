@@ -1,52 +1,77 @@
 import os
-import uuid
 import boto3
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
-from ..utils.config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET_NAME
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from pydantic import ValidationError
+from datetime import datetime
+from bson.objectid import ObjectId
+from services.db.client import get_mongo_client
+from services.db.models import File as FileModel, PyObjectId
+from utils.config import AWS_ACCESS_KEY,AWS_SECRET_ACCESS_KEY, S3_BUCKET_NAME
+from services.ai_pipeline import run_ai_pipeline
+from services.db.dao.file_dao import insert_file_metadata
 
-# Create an APIRouter instance
-api_router = APIRouter(prefix="/api")
+router = APIRouter()
 
-@api_router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=AWS_ACCESS_KEY,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+)
+
+@router.post("/api/upload")
+async def upload_file(file: UploadFile = File(...), background_tasks: BackgroundTasks):
     """
-    Handles a file upload request from the frontend.
-    It receives a file, uploads it to an S3 bucket, and returns the file's URL.
+    Handles the file upload process, uploads to S3, and saves metadata to MongoDB.
     """
-    if not file:
-        raise HTTPException(status_code=400, detail="No file part in the request")
-
-    if file.filename == '':
-        raise HTTPException(status_code=400, detail="No selected file")
+    if not S3_BUCKET_NAME:
+        raise HTTPException(status_code=500, detail="S3_BUCKET_NAME not configured.")
+    
+    # Placeholder for the user's ID. In a real application, you would
+    # get this from the authenticated user's session or token.
+    user_id = "123456789012345678901234" # Example placeholder ID
+    
+    # Generate a unique key for S3 to avoid filename collisions
+    s3_key = f"uploads/{user_id}/{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
 
     try:
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+        # Step 1: Upload file to S3
+        file_content = await file.read()
+
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            Body=file_content,
+            ContentType=file.content_type
         )
 
-        original_filename = file.filename
-        file_extension = os.path.splitext(original_filename)[1]
-        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        # Step 2: Get a database connection
+        client = get_mongo_client()
+        if not client:
+            raise HTTPException(status_code=500, detail="Failed to connect to the database.")
+        
+        db = client["medocs"]
 
-        # Upload the file object directly to S3
-        s3_client.upload_fileobj(
-            file.file,
-            S3_BUCKET_NAME,
-            unique_filename
-        )
+        # Step 3: Prepare the document for MongoDB
+        file_doc = {
+            "userId": PyObjectId(user_id),
+            "originalFileName": file.filename,
+            "s3Key": s3_key,
+            "fileSize": len(file_content),
+            "uploadDate": datetime.utcnow(),
+            "extractedDataId": None, # Will be added later
+            "rawText": "", # Will be populated by the AI pipeline
+            "embeddings": [] # Will be populated by the AI pipeline
+        }
 
-        file_url = f"https://{S3_BUCKET_NAME}.s3.amazonaws.com/{unique_filename}"
+        # Save the file metadata to MongoDB
+        file_id = str(insert_file_metadata(db, file_doc))
+        # Run the AI pipeline in the background
+        background_tasks.add_task(run_ai_pipeline, file_content, s3_key, file_id)
+        return {"message": "File uploaded and metadata saved successfully", "file_id": file_id}
 
-        return JSONResponse(content={
-            'message': 'File uploaded successfully!',
-            'url': file_url
-        }, status_code=200)
-
+    except ValidationError as e:
+        # Handle schema validation errors
+        raise HTTPException(status_code=400, detail=f"Data validation failed: {e}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"An error occurred during the upload process: {str(e)}"
-        )
+        # General error handling for S3 or MongoDB issues
+        raise HTTPException(status_code=500, detail=str(e))

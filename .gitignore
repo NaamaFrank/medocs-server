@@ -38,7 +38,7 @@ env/
 
 # Pytest cache
 .pytest_cache/
-
+.idea
 # mypy
 .mypy_cache/
 .dmypy.json
